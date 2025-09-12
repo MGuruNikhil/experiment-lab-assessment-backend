@@ -24,4 +24,5 @@ export declare function updateMilestone(req: Request, res: Response): Promise<Re
 export declare function deleteMilestone(req: Request, res: Response): Promise<Response<any, Record<string, any>>>;
 export declare function addMilestoneDependency(req: Request, res: Response): Promise<Response<any, Record<string, any>>>;
 export declare function suggestForGoal(req: Request, res: Response): Promise<Response<any, Record<string, any>>>;
+export declare function listSuggestionsForGoal(req: Request, res: Response): Promise<Response<any, Record<string, any>>>;
 //# sourceMappingURL=goal.controller.d.ts.map

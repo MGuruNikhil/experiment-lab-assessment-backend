@@ -16,6 +16,7 @@ router.put("/milestones/:milestoneId", requireAuth, goalController.updateMilesto
 router.delete("/milestones/:milestoneId", requireAuth, goalController.deleteMilestone);
 router.post("/milestones/:milestoneId/dependencies", requireAuth, goalController.addMilestoneDependency);
 router.post("/goals/:goalId/suggest", requireAuth, goalController.suggestForGoal);
+router.get("/goals/:goalId/suggestions", requireAuth, goalController.listSuggestionsForGoal);
 
 export default router;
 

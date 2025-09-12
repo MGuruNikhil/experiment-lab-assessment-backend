@@ -48,5 +48,6 @@ router.put("/milestones/:milestoneId", auth_middleware_1.requireAuth, goalContro
 router.delete("/milestones/:milestoneId", auth_middleware_1.requireAuth, goalController.deleteMilestone);
 router.post("/milestones/:milestoneId/dependencies", auth_middleware_1.requireAuth, goalController.addMilestoneDependency);
 router.post("/goals/:goalId/suggest", auth_middleware_1.requireAuth, goalController.suggestForGoal);
+router.get("/goals/:goalId/suggestions", auth_middleware_1.requireAuth, goalController.listSuggestionsForGoal);
 exports.default = router;
 //# sourceMappingURL=goal.routes.js.map

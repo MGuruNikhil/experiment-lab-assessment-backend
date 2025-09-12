@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
+import { generateJourneyWithLLM, LLMJourneySchema } from "../services/llmService";
 
 function userId(req: Request): string {
   return (req as any).userId as string;
@@ -257,6 +258,13 @@ export async function createMilestone(req: Request, res: Response) {
   const journey = await prisma.journey.findFirst({ where: { id: journeyId, goal: { userId: uid } }, select: { id: true } });
   if (!journey) return notFound(res, "Journey not found");
 
+  // Idempotency: if a milestone with the same orderIndex already exists for this journey, return it
+  const existing = await prisma.milestone.findFirst({ where: { journeyId, orderIndex: parsed.data.orderIndex } });
+  if (existing) {
+    log("milestone.create.idempotent", { uid, journeyId, milestoneId: existing.id, orderIndex: parsed.data.orderIndex });
+    return res.json(existing);
+  }
+
   const milestone = await prisma.milestone.create({
     data: {
       journeyId,
@@ -390,6 +398,7 @@ export async function suggestForGoal(req: Request, res: Response) {
 
   const goal = await prisma.goal.findFirst({ where: { id: goalId, userId: uid } });
   if (!goal) return notFound(res, "Goal not found");
+  const goalIdLocal = goal.id; // safe local copy for closures below
 
   const heuristic = generateHeuristicJourney(
     goal.title,
@@ -398,25 +407,180 @@ export async function suggestForGoal(req: Request, res: Response) {
     parsed.data.chunking ?? (goal.chunking as any) ?? "weekly",
   );
 
-  // Persist heuristic suggestion
-  await prisma.suggestion.create({
-    data: {
-      userId: uid,
-      goalId: goal.id,
-      provider: "heuristic",
-      response: heuristic as any,
-    },
-  });
+  // Helper to persist heuristic only when returned, with basic dedupe (10 minutes)
+  async function persistHeuristicOnce() {
+    const last = await prisma.suggestion.findFirst({
+      where: { userId: uid, goalId: goalIdLocal, provider: "heuristic" },
+      orderBy: { createdAt: "desc" },
+      select: { createdAt: true },
+    });
+    const now = Date.now();
+    const recent = last ? (now - new Date(last.createdAt).getTime() < 10 * 60 * 1000) : false;
+    if (!recent) {
+      await prisma.suggestion.create({
+        data: {
+          userId: uid,
+          goalId: goalIdLocal,
+          provider: "heuristic",
+          response: heuristic as any,
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        },
+      });
+    }
+  }
 
   const useLLM = parsed.data.useLLM === true;
-  const providerConfigured = Boolean(process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY);
+  const providerConfigured = Boolean(process.env.OPENROUTER_API_KEY);
+  console.log("[suggest] pre", { uid, goalId: goal.id, useLLM, providerConfigured });
 
   if (!useLLM || !providerConfigured) {
+    await persistHeuristicOnce();
     return res.json(heuristic);
   }
 
-  // If LLM flow desired, still return heuristic immediately for instant UI rendering
-  return res.json({ heuristicSuggestion: heuristic });
+  // Daily quota: MAX_LLM_PER_DAY (default 20). Set env to override.
+  const maxEnv = Number(process.env.MAX_LLM_PER_DAY);
+  const maxPerDay = Number.isFinite(maxEnv) && maxEnv > 0 ? maxEnv : 20;
+  const nowDate = new Date();
+  const startOfDay = new Date(nowDate);
+  startOfDay.setHours(0, 0, 0, 0);
+  const usedToday = await prisma.suggestion.count({
+    where: { userId: uid, provider: "openrouter", createdAt: { gte: startOfDay } },
+  });
+  console.log("[suggest] quota", { uid, usedToday, maxPerDay });
+  if (usedToday >= maxPerDay) {
+    const nextDay = new Date(startOfDay);
+    nextDay.setDate(nextDay.getDate() + 1);
+    const retryAfterSec = Math.max(1, Math.floor((nextDay.getTime() - nowDate.getTime()) / 1000));
+  return res.status(429).json({ error: "Daily suggestion limit reached", retryAfter: retryAfterSec });
+  }
+
+  // caching by expiresAt
+  // Prefer the most recent valid parsed LLM suggestion (in case a later error record exists)
+  const cachedList = await prisma.suggestion.findMany({
+    where: { userId: uid, goalId: goal.id, provider: "openrouter", expiresAt: { gt: new Date() } },
+    orderBy: { createdAt: "desc" },
+    take: 5,
+  });
+  const firstParsed = cachedList.find((c) => {
+    const r: any = c.response as any;
+    return r && typeof r === "object" && "parsed" in r && r.parsed && typeof r.parsed === "object";
+  });
+  console.log("[suggest] cache", { entries: cachedList.length, hasParsed: Boolean(firstParsed) });
+  if (firstParsed) {
+    const r: any = firstParsed.response as any;
+    return res.json({ ...(r.parsed as any), cached: true, cachedAt: firstParsed.createdAt });
+  }
+  // Fall back to latest cache entry (may contain rawText or error info)
+  if (cachedList[0]) {
+    const latest = cachedList[0]!;
+    return res.json({ suggestion: latest.response as any, cached: true, cachedAt: latest.createdAt });
+  }
+
+  // Call LLM provider
+  try {
+    const providerOpts: any = {};
+    if (typeof parsed.data.durationWeeks === "number") providerOpts.durationWeeks = parsed.data.durationWeeks;
+    if (parsed.data.chunking) providerOpts.chunking = parsed.data.chunking;
+    console.log("[suggest] calling LLM", { uid, goalId: goal.id, providerOpts });
+    const { parsed: llmParsed, rawText } = await generateJourneyWithLLM(
+      {
+        id: goal.id,
+        title: goal.title,
+        description: goal.description ?? null,
+        complexity: goal.complexity ?? null,
+        suggestedWeeks: goal.suggestedWeeks ?? null,
+        chunking: goal.chunking ?? null,
+      },
+      providerOpts
+    );
+    console.log("[suggest] llm.result", { hasParsed: Boolean(llmParsed), rawLen: rawText?.length ?? 0 });
+
+    if (llmParsed) {
+      // Validate explicitly again (defensive)
+      const valid = LLMJourneySchema.parse(llmParsed);
+      // Persist suggestion
+      await prisma.suggestion.create({
+        data: { userId: uid, goalId: goal.id, provider: "openrouter", response: { rawText, parsed: valid } as any, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) },
+      });
+
+      // Create journey + milestones in DB within a transaction
+  const created = await prisma.$transaction(async (tx) => {
+        const journey = await tx.journey.create({
+          data: {
+            goalId: goal.id,
+            title: valid.journeyTitle,
+            meta: { durationWeeks: valid.durationWeeks, chunking: valid.chunking },
+          },
+        });
+
+        // Create milestones first; store their ids to add dependencies
+        const ids: string[] = [];
+        for (const [i, m] of valid.milestones.entries()) {
+          const createdMs = await tx.milestone.create({
+            data: {
+              journeyId: journey.id,
+              title: m!.title,
+              description: m!.description ?? null,
+              orderIndex: i,
+              startWeek: m!.startWeek,
+              endWeek: m!.endWeek,
+              estimatedHours: m!.estimatedHours ?? null,
+            },
+            select: { id: true },
+          });
+          ids.push(createdMs.id);
+        }
+
+        // Add dependencies (only indices within range and earlier milestones) in bulk
+        const depRows: Array<{ milestoneId: string; dependsOnId: string }> = [];
+        for (const [i, m] of valid.milestones.entries()) {
+          const deps = m.dependencies ?? [];
+          for (const d of deps) {
+            if (Number.isInteger(d) && d >= 0 && d < i) {
+              depRows.push({ milestoneId: ids[i]!, dependsOnId: ids[d]! });
+            }
+          }
+        }
+        if (depRows.length > 0) {
+          await tx.milestoneDependency.createMany({ data: depRows, skipDuplicates: true });
+        }
+        return journey;
+  }, { timeout: 14000, maxWait: 5000 });
+
+      return res.json({ ...valid, journeyId: created.id });
+    }
+
+    // If parsing failed, persist raw and fallback
+  await prisma.suggestion.create({ data: { userId: uid, goalId: goal.id, provider: "openrouter", response: { rawText } as any, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) } });
+  console.warn("[suggest] llm.parse.miss -> fallback heuristic");
+  await persistHeuristicOnce();
+  return res.json({ ...heuristic, llmError: true });
+  } catch (e: any) {
+    // Persist failure meta
+    await prisma.suggestion.create({
+      data: { userId: uid, goalId: goal.id, provider: "openrouter", response: { error: String(e?.message || e) } as any, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) },
+    });
+  console.error("[suggest] llm.error", { message: String(e?.message || e) });
+  await persistHeuristicOnce();
+  return res.json({ ...heuristic, llmError: true });
+  }
+}
+
+export async function listSuggestionsForGoal(req: Request, res: Response) {
+  const uid = userId(req);
+  const { goalId } = req.params as { goalId: string };
+  const goal = await prisma.goal.findFirst({ where: { id: goalId, userId: uid } });
+  if (!goal) return notFound(res, "Goal not found");
+
+  const suggestions = await prisma.suggestion.findMany({
+    where: { userId: uid, goalId: goal.id },
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true, provider: true, response: true, createdAt: true, expiresAt: true,
+    },
+  });
+  return res.json(suggestions);
 }
 
 
