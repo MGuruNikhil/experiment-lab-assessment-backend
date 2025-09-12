@@ -8,19 +8,19 @@ export const requireAuth = (req: Request, res: Response, next: NextFunction) => 
     const auth = req.headers.authorization ?? "";
     const [scheme, token] = auth.split(" ");
     if (scheme !== "Bearer" || !token) {
-      return res.status(401).json({ message: "Unauthorized" });
+      return res.status(401).json({ error: "Unauthorized" });
     }
     if (!JWT_SECRET) {
-      return res.status(500).json({ message: "JWT secret not configured" });
+      return res.status(500).json({ error: "JWT secret not configured" });
     }
     const payload = jwt.verify(token, JWT_SECRET) as { sub?: string };
     if (!payload?.sub) {
-      return res.status(401).json({ message: "Unauthorized" });
+      return res.status(401).json({ error: "Unauthorized" });
     }
     (req as any).userId = payload.sub;
     return next();
   } catch (_err) {
-    return res.status(401).json({ message: "Unauthorized" });
+    return res.status(401).json({ error: "Unauthorized" });
   }
 };
 

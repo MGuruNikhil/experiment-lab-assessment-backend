@@ -21,4 +21,89 @@ model User {
   password  String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  goals       Goal[]
+  suggestions Suggestion[]
+}
+
+model Goal {
+  id             String    @id @default(uuid()) @db.Uuid
+  userId         String    @db.Uuid
+  user           User      @relation(fields: [userId], references: [id])
+  title          String
+  description    String?
+  complexity     Int?      // 1..10
+  suggestedWeeks Int?
+  chunking       String?   // "weekly"|"biweekly"
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  journeys       Journey[]
+  suggestions    Suggestion[]
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model Journey {
+  id         String    @id @default(uuid()) @db.Uuid
+  goalId     String    @db.Uuid
+  goal       Goal      @relation(fields: [goalId], references: [id])
+  title      String?
+  startDate  DateTime?
+  endDate    DateTime?
+  meta       Json?
+  createdAt  DateTime  @default(now())
+  milestones Milestone[]
+
+  @@index([goalId])
+  @@index([createdAt])
+}
+
+model Milestone {
+  id             String   @id @default(uuid()) @db.Uuid
+  journeyId      String   @db.Uuid
+  journey        Journey  @relation(fields: [journeyId], references: [id])
+  title          String
+  description    String?
+  orderIndex     Int
+  startWeek      Int?
+  endWeek        Int?
+  estimatedHours Int?
+  progress       Int      @default(0) // 0-100
+  metadata       Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  dependencies   MilestoneDependency[] @relation("deps_from")
+  requiredBy     MilestoneDependency[] @relation("deps_to")
+
+  @@index([journeyId])
+  @@index([createdAt])
+}
+
+model MilestoneDependency {
+  id          String    @id @default(uuid()) @db.Uuid
+  milestoneId String    @db.Uuid
+  dependsOnId String    @db.Uuid
+  milestone   Milestone @relation("deps_from", fields: [milestoneId], references: [id])
+  dependsOn   Milestone @relation("deps_to", fields: [dependsOnId], references: [id])
+  createdAt   DateTime  @default(now())
+
+  @@index([milestoneId])
+  @@index([dependsOnId])
+}
+
+model Suggestion {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  goalId    String   @db.Uuid
+  user      User     @relation(fields: [userId], references: [id])
+  goal      Goal     @relation(fields: [goalId], references: [id])
+  provider  String   // "heuristic"|"openrouter"|"other"
+  response  Json
+  createdAt DateTime @default(now())
+  expiresAt DateTime?
+
+  @@index([userId])
+  @@index([goalId])
+  @@index([createdAt])
 }
