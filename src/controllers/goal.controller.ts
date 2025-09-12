@@ -25,6 +25,54 @@ function firstIssueMessage(error: z.ZodError): string {
   return first?.message ?? "Invalid request body";
 }
 
+function stableStringify(obj: any): string {
+  // Deterministic stringify: sorts object keys recursively
+  if (obj === null || typeof obj !== "object") return JSON.stringify(obj);
+  if (Array.isArray(obj)) return `[${obj.map((v) => stableStringify(v)).join(",")}]`;
+  const keys = Object.keys(obj).sort();
+  const entries = keys.map((k) => `${JSON.stringify(k)}:${stableStringify((obj as any)[k])}`);
+  return `{${entries.join(",")}}`;
+}
+
+function hashString32(str: string): string {
+  // FNV-1a 32-bit hash (sufficient for cache keying, not for security)
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = (h + (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24)) >>> 0;
+  }
+  return h.toString(16).padStart(8, "0");
+}
+
+function computeSuggestionSignature(goal: {
+  id: string;
+  title: string;
+  description: string | null;
+  complexity: number | null;
+  suggestedWeeks: number | null;
+  chunking: string | null;
+}, options: { durationWeeks?: number; chunking?: "weekly" | "biweekly" } | undefined) {
+  const payload = {
+    goal: {
+      id: goal.id,
+      title: goal.title,
+      description: goal.description ?? null,
+      complexity: goal.complexity ?? null,
+      suggestedWeeks: goal.suggestedWeeks ?? null,
+      chunking: goal.chunking === "biweekly" ? "biweekly" : (goal.chunking ? "weekly" : null),
+      updatedAt: undefined, // excluded on purpose
+      createdAt: undefined, // excluded on purpose
+    },
+    options: {
+      durationWeeks: typeof options?.durationWeeks === "number" ? options.durationWeeks : undefined,
+      chunking: options?.chunking ?? undefined,
+    },
+  };
+  const str = stableStringify(payload);
+  // Short hash for efficient equality
+  return hashString32(str);
+}
+
 export function generateHeuristicJourney(
   title: string,
   complexity?: number | null,
@@ -176,6 +224,15 @@ export async function updateGoal(req: Request, res: Response) {
   if ("suggestedWeeks" in parsed.data) updateData.suggestedWeeks = (parsed.data as any).suggestedWeeks ?? null;
   if ("chunking" in parsed.data) updateData.chunking = (parsed.data as any).chunking ?? null;
   const goal = await prisma.goal.update({ where: { id: goalId }, data: updateData });
+  // Invalidate existing cached LLM suggestions for this goal by expiring them
+  try {
+    await prisma.suggestion.updateMany({
+      where: { goalId, provider: "openrouter", expiresAt: { gt: new Date() } },
+      data: { expiresAt: new Date() },
+    });
+  } catch (e) {
+    console.warn("[goal.update] cache.expire.failed", { goalId, message: String((e as any)?.message || e) });
+  }
   log("goal.update", { uid, goalId });
   return res.json(goal);
 }
@@ -186,18 +243,29 @@ export async function deleteGoal(req: Request, res: Response) {
   const exists = await prisma.goal.findFirst({ where: { id: goalId, userId: uid }, select: { id: true } });
   if (!exists) return notFound(res, "Goal not found");
 
+  // Delete suggestions referencing this goal outside the transaction to reduce TX duration
+  await prisma.suggestion.deleteMany({ where: { goalId } });
+
   await prisma.$transaction(async (tx) => {
-    const journeys = await tx.journey.findMany({ where: { goalId } });
-    const journeyIds = journeys.map(j => j.id);
-    const milestones = await tx.milestone.findMany({ where: { journeyId: { in: journeyIds } }, select: { id: true } });
-    const milestoneIds = milestones.map(m => m.id);
-    if (milestoneIds.length > 0) {
-      await tx.milestoneDependency.deleteMany({ where: { OR: [{ milestoneId: { in: milestoneIds } }, { dependsOnId: { in: milestoneIds } }] } });
-      await tx.milestone.deleteMany({ where: { id: { in: milestoneIds } } });
-    }
+    // Delete all milestone dependencies where either side belongs to this goal's journeys
+    await tx.milestoneDependency.deleteMany({
+      where: {
+        OR: [
+          { milestone: { is: { journey: { is: { goalId } } } } },
+          { dependsOn: { is: { journey: { is: { goalId } } } } },
+        ],
+      },
+    });
+
+    // Delete milestones belonging to this goal's journeys
+    await tx.milestone.deleteMany({ where: { journey: { is: { goalId } } } });
+
+    // Delete journeys of this goal
     await tx.journey.deleteMany({ where: { goalId } });
+
+    // Finally delete the goal
     await tx.goal.delete({ where: { id: goalId } });
-  });
+  }, { timeout: 14000, maxWait: 5000 });
   log("goal.delete", { uid, goalId });
   return res.json({ ok: true });
 }
@@ -456,25 +524,44 @@ export async function suggestForGoal(req: Request, res: Response) {
   }
 
   // caching by expiresAt
-  // Prefer the most recent valid parsed LLM suggestion (in case a later error record exists)
+  // Prefer the most recent valid parsed LLM suggestion whose signature matches current goal/options
   const cachedList = await prisma.suggestion.findMany({
     where: { userId: uid, goalId: goal.id, provider: "openrouter", expiresAt: { gt: new Date() } },
     orderBy: { createdAt: "desc" },
-    take: 5,
+    take: 10,
   });
+  const sigOptions: { durationWeeks?: number; chunking?: "weekly" | "biweekly" } = {};
+  if (typeof parsed.data.durationWeeks === "number") sigOptions.durationWeeks = parsed.data.durationWeeks;
+  if (parsed.data.chunking) sigOptions.chunking = parsed.data.chunking;
+  const currentSig = computeSuggestionSignature(
+    {
+      id: goal.id,
+      title: goal.title,
+      description: goal.description ?? null,
+      complexity: goal.complexity ?? null,
+      suggestedWeeks: goal.suggestedWeeks ?? null,
+      chunking: goal.chunking ?? null,
+    },
+    sigOptions
+  );
   const firstParsed = cachedList.find((c) => {
     const r: any = c.response as any;
-    return r && typeof r === "object" && "parsed" in r && r.parsed && typeof r.parsed === "object";
+    const sig = r && typeof r === "object" ? (r.signature as string | undefined) : undefined;
+    return sig === currentSig && r && typeof r === "object" && "parsed" in r && r.parsed && typeof r.parsed === "object";
   });
-  console.log("[suggest] cache", { entries: cachedList.length, hasParsed: Boolean(firstParsed) });
+  console.log("[suggest] cache", { entries: cachedList.length, matchingParsed: Boolean(firstParsed) });
   if (firstParsed) {
     const r: any = firstParsed.response as any;
     return res.json({ ...(r.parsed as any), cached: true, cachedAt: firstParsed.createdAt });
   }
-  // Fall back to latest cache entry (may contain rawText or error info)
-  if (cachedList[0]) {
-    const latest = cachedList[0]!;
-    return res.json({ suggestion: latest.response as any, cached: true, cachedAt: latest.createdAt });
+  // Optionally, if there is a latest cache with matching signature but no parsed, return that metadata
+  const latestMatching = cachedList.find((c) => {
+    const r: any = c.response as any;
+    const sig = r && typeof r === "object" ? (r.signature as string | undefined) : undefined;
+    return sig === currentSig;
+  });
+  if (latestMatching) {
+    return res.json({ suggestion: latestMatching.response as any, cached: true, cachedAt: latestMatching.createdAt });
   }
 
   // Call LLM provider
@@ -483,7 +570,7 @@ export async function suggestForGoal(req: Request, res: Response) {
     if (typeof parsed.data.durationWeeks === "number") providerOpts.durationWeeks = parsed.data.durationWeeks;
     if (parsed.data.chunking) providerOpts.chunking = parsed.data.chunking;
     console.log("[suggest] calling LLM", { uid, goalId: goal.id, providerOpts });
-    const { parsed: llmParsed, rawText } = await generateJourneyWithLLM(
+  const { parsed: llmParsed, rawText } = await generateJourneyWithLLM(
       {
         id: goal.id,
         title: goal.title,
@@ -499,9 +586,20 @@ export async function suggestForGoal(req: Request, res: Response) {
     if (llmParsed) {
       // Validate explicitly again (defensive)
       const valid = LLMJourneySchema.parse(llmParsed);
+      const signature = computeSuggestionSignature(
+        {
+          id: goal.id,
+          title: goal.title,
+          description: goal.description ?? null,
+          complexity: goal.complexity ?? null,
+          suggestedWeeks: goal.suggestedWeeks ?? null,
+          chunking: goal.chunking ?? null,
+        },
+        sigOptions
+      );
       // Persist suggestion
       await prisma.suggestion.create({
-        data: { userId: uid, goalId: goal.id, provider: "openrouter", response: { rawText, parsed: valid } as any, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) },
+        data: { userId: uid, goalId: goal.id, provider: "openrouter", response: { rawText, parsed: valid, signature, goalSnapshot: { id: goal.id, title: goal.title, description: goal.description ?? null, complexity: goal.complexity ?? null, suggestedWeeks: goal.suggestedWeeks ?? null, chunking: goal.chunking ?? null }, options: sigOptions } as any, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) },
       });
 
       // Create journey + milestones in DB within a transaction
@@ -551,8 +649,19 @@ export async function suggestForGoal(req: Request, res: Response) {
       return res.json({ ...valid, journeyId: created.id });
     }
 
-    // If parsing failed, persist raw and fallback
-  await prisma.suggestion.create({ data: { userId: uid, goalId: goal.id, provider: "openrouter", response: { rawText } as any, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) } });
+    // If parsing failed, persist raw and fallback (still with signature so cache can be matched explicitly)
+  const signature = computeSuggestionSignature(
+      {
+        id: goal.id,
+        title: goal.title,
+        description: goal.description ?? null,
+        complexity: goal.complexity ?? null,
+        suggestedWeeks: goal.suggestedWeeks ?? null,
+        chunking: goal.chunking ?? null,
+      },
+      sigOptions
+    );
+  await prisma.suggestion.create({ data: { userId: uid, goalId: goal.id, provider: "openrouter", response: { rawText, signature, goalSnapshot: { id: goal.id, title: goal.title, description: goal.description ?? null, complexity: goal.complexity ?? null, suggestedWeeks: goal.suggestedWeeks ?? null, chunking: goal.chunking ?? null }, options: sigOptions } as any, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) } });
   console.warn("[suggest] llm.parse.miss -> fallback heuristic");
   await persistHeuristicOnce();
   return res.json({ ...heuristic, llmError: true });
