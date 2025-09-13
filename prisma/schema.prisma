@@ -25,6 +25,7 @@ model User {
   goals           Goal[]
   suggestions     Suggestion[]
   tutorSessions   TutorSession[]
+  sessionSummaries SessionSummary[]
   CheckinSchedule CheckinSchedule[]
   CheckinEntry    CheckinEntry[]
 }
@@ -131,6 +132,7 @@ model TutorSession {
   createdAt   DateTime       @default(now())
   updatedAt   DateTime       @updatedAt
   messages    TutorMessage[]
+  summary     SessionSummary?
 
   @@index([userId])
 }
@@ -145,6 +147,24 @@ model TutorMessage {
   createdAt DateTime     @default(now())
 
   @@index([sessionId, createdAt])
+}
+
+// Summaries generated for a tutor session (LLM-produced or heuristic)
+model SessionSummary {
+  id          String       @id @default(uuid()) @db.Uuid
+  sessionId   String       @unique @db.Uuid
+  session     TutorSession @relation(fields: [sessionId], references: [id])
+  userId      String       @db.Uuid
+  user        User         @relation(fields: [userId], references: [id])
+  summaryText String
+  keyPoints   Json?        // array of short bullet points
+  actionItems Json?        // array of action items { text, due?: Date }
+  provider    String       // 'openrouter'|'heuristic' etc.
+  rawResponse Json?        // optional raw LLM response for auditing
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([userId, createdAt])
 }
 
 // Check-in scheduling and entries

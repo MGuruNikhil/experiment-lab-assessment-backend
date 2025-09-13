@@ -1,6 +1,7 @@
 import { prisma } from "../lib/prisma";
 import { generateTutorReply } from "./llmService";
 import { buildTutorPrompt } from "../lib/promptTemplates";
+import { generateAndStoreSummary } from "./tutorSummaryService";
 
 export type CreateSessionInput = {
   userId: string;
@@ -116,7 +117,7 @@ export async function sendMessage(input: SendMessageInput) {
       : Promise.resolve(null),
   ]);
 
-  const messages: Array<{ role: "user" | "assistant" | "system"; content: string; createdAt: Date }> = (recentMessages || []).map((m) => ({
+  const messages: Array<{ role: "user" | "assistant" | "system"; content: string; createdAt: Date }> = (recentMessages || []).map((m: { sender: string; content: string; createdAt: Date }) => ({
     role: (m.sender as any) === "assistant" ? "assistant" : (m.sender as any) === "system" ? "system" : "user",
     content: sanitizeText(m.content),
     createdAt: m.createdAt as Date,
@@ -165,5 +166,11 @@ export async function sendMessage(input: SendMessageInput) {
 export async function closeSession(userId: string, sessionId: string) {
   await ensureOwnershipSession(userId, sessionId);
   const updated = await prisma.tutorSession.update({ where: { id: sessionId }, data: { status: "closed" } });
+  // Best-effort summary generation; ignore errors
+  try {
+    await generateAndStoreSummary(userId, sessionId, { force: false });
+  } catch (_e) {
+    // swallow; session is closed regardless
+  }
   return updated;
 }

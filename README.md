@@ -38,6 +38,15 @@ npx prisma migrate dev --name add_checkins
 npx prisma generate
 ```
 
+To add session summaries for tutor sessions, after editing `prisma/schema.prisma`:
+
+```bash
+# create and apply migration
+npx prisma migrate dev --name add_session_summary
+# re-generate the client
+npx prisma generate
+```
+
 4. Run dev server:
 
 ```bash
