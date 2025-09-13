@@ -24,6 +24,7 @@ model User {
 
   goals       Goal[]
   suggestions Suggestion[]
+  tutorSessions TutorSession[]
 }
 
 model Goal {
@@ -39,6 +40,7 @@ model Goal {
   updatedAt      DateTime  @updatedAt
   journeys       Journey[]
   suggestions    Suggestion[]
+  tutorSessions  TutorSession[]
 
   @@index([userId])
   @@index([createdAt])
@@ -75,6 +77,7 @@ model Milestone {
   updatedAt      DateTime @updatedAt
   dependencies   MilestoneDependency[] @relation("deps_from")
   requiredBy     MilestoneDependency[] @relation("deps_to")
+  tutorSessions  TutorSession[]
 
   @@index([journeyId])
   @@index([createdAt])
@@ -106,4 +109,34 @@ model Suggestion {
   @@index([userId])
   @@index([goalId])
   @@index([createdAt])
+}
+
+// Tutor session and message models for AI-assisted tutoring and chat history
+model TutorSession {
+  id           String        @id @default(uuid()) @db.Uuid
+  userId       String        @db.Uuid
+  user         User          @relation(fields: [userId], references: [id])
+  goalId       String?       @db.Uuid // optional: session tied to a goal
+  goal         Goal?         @relation(fields: [goalId], references: [id])
+  milestoneId  String?       @db.Uuid // optional: tied to a milestone
+  milestone    Milestone?    @relation(fields: [milestoneId], references: [id])
+  title        String?
+  status       String        @default("open") // open|closed
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  messages     TutorMessage[]
+
+  @@index([userId])
+}
+
+model TutorMessage {
+  id         String       @id @default(uuid()) @db.Uuid
+  sessionId  String       @db.Uuid
+  session    TutorSession @relation(fields: [sessionId], references: [id])
+  sender     String       // "user" | "assistant" | "system"
+  content    String
+  metadata   Json?        // e.g., { model: 'gpt-x', tokens: 123 }
+  createdAt  DateTime     @default(now())
+
+  @@index([sessionId, createdAt])
 }

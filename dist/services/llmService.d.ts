@@ -63,8 +63,31 @@ export type MinimalGoal = {
     suggestedWeeks?: number | null;
     chunking?: string | null;
 };
+export type MinimalMilestone = {
+    id: string;
+    title: string;
+    description?: string | null;
+};
+export type TutorMessage = {
+    role: "user" | "assistant" | "system";
+    content: string;
+    createdAt?: string | Date;
+};
+export type TutorMode = string | undefined;
 export declare function generateJourneyWithLLM(goal: MinimalGoal, options?: ProviderOptions): Promise<{
     parsed?: LLMJourney;
     rawText: string;
+}>;
+export declare function generateTutorReply(args: {
+    sessionId: string;
+    goal?: MinimalGoal | null;
+    milestone?: MinimalMilestone | null;
+    messages: TutorMessage[];
+    userContext?: Record<string, any> | null;
+    mode?: TutorMode;
+}): Promise<{
+    replyText: string;
+    structured?: any;
+    providerMeta?: any;
 }>;
 //# sourceMappingURL=llmService.d.ts.map

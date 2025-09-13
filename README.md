@@ -20,6 +20,15 @@ npm run prisma:generate
 npm run prisma:migrate --name init
 ```
 
+To add tutor session/message models later, after editing `prisma/schema.prisma`:
+
+```bash
+# generate updated client
+npm run prisma:generate
+# create and apply migration
+npm run prisma:migrate --name add_tutor_models
+```
+
 4. Run dev server:
 
 ```bash
