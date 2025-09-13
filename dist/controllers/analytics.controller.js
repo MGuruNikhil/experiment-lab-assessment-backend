@@ -19,7 +19,6 @@ function formatISODateOnly(d) {
 }
 async function getAnalytics(req, res) {
     const uid = userId(req);
-    // Load all goals with milestone progress to compute metrics in-memory (simpler and OK for small-medium datasets)
     const goals = await prisma_1.prisma.goal.findMany({
         where: { userId: uid },
         select: {

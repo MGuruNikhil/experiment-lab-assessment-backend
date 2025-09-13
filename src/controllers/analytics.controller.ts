@@ -23,7 +23,14 @@ export async function getAnalytics(req: Request, res: Response) {
   const uid = userId(req);
 
   // Load all goals with milestone progress to compute metrics in-memory (simpler and OK for small-medium datasets)
-  const goals = await prisma.goal.findMany({
+  type MilestoneLite = { progress: number | null; updatedAt: Date };
+  type GoalRow = {
+    id: string;
+    createdAt: Date;
+    journeys: { milestones: MilestoneLite[] }[];
+  };
+
+  const goals: GoalRow[] = await prisma.goal.findMany({
     where: { userId: uid },
     select: {
       id: true,
@@ -40,19 +47,19 @@ export async function getAnalytics(req: Request, res: Response) {
   const totalGoals = goals.length;
 
   // Per-goal milestone collections
-  const goalMilestones = goals.map((g) => g.journeys.flatMap((j) => j.milestones));
+  const goalMilestones: MilestoneLite[][] = goals.map((g: GoalRow) => g.journeys.flatMap((j) => j.milestones));
 
   // A goal is considered completed if it has at least one milestone and all milestones are at 100%
-  const completedGoals = goalMilestones.filter((ms) => ms.length > 0 && ms.every((m) => m.progress === 100)).length;
+  const completedGoals = goalMilestones.filter((ms: MilestoneLite[]) => ms.length > 0 && ms.every((m: MilestoneLite) => m.progress === 100)).length;
 
   // Average completion percent per goal (average of its milestones' progress) then averaged across goals.
   // If a goal has no milestones, it contributes 0 to the average.
-  const perGoalPct = goalMilestones.map((ms) => {
+  const perGoalPct = goalMilestones.map((ms: MilestoneLite[]) => {
     if (ms.length === 0) return 0;
-    const avg = ms.reduce((sum, m) => sum + (m.progress ?? 0), 0) / ms.length;
+    const avg = ms.reduce((sum: number, m: MilestoneLite) => sum + (m.progress ?? 0), 0) / ms.length;
     return avg; // 0..100
   });
-  const avgCompletionPercent = totalGoals > 0 ? perGoalPct.reduce((a, b) => a + b, 0) / totalGoals : 0;
+  const avgCompletionPercent = totalGoals > 0 ? perGoalPct.reduce((a: number, b: number) => a + b, 0) / totalGoals : 0;
 
   // Active goals: total - completed (goals with zero milestones counted as active by definition here)
   const activeGoals = totalGoals - completedGoals;
@@ -63,7 +70,7 @@ export async function getAnalytics(req: Request, res: Response) {
   fourWeeksAgo.setUTCDate(fourWeeksAgo.getUTCDate() - 28);
   const milestonesLast4Weeks = goalMilestones
     .flat()
-    .filter((m) => m.progress === 100 && m.updatedAt >= fourWeeksAgo);
+    .filter((m: MilestoneLite) => m.progress === 100 && m.updatedAt >= fourWeeksAgo);
   const learningVelocityPerWeek = milestonesLast4Weeks.length / 4;
 
   // Time series for the last 12 weeks (inclusive of current week)
@@ -91,11 +98,11 @@ export async function getAnalytics(req: Request, res: Response) {
 
   // Completed counts by completion date inferred as max(updatedAt) across milestones when completed
   for (let i = 0; i < goals.length; i++) {
-    const ms = goalMilestones[i] ?? [];
+  const ms: MilestoneLite[] = goalMilestones[i] ?? [];
     if (ms.length === 0) continue;
-    const isComplete = ms.every((m) => m.progress === 100);
+  const isComplete = ms.every((m: MilestoneLite) => m.progress === 100);
     if (!isComplete) continue;
-    const completionDate = new Date(Math.max(...ms.map((m) => m.updatedAt.getTime())));
+  const completionDate = new Date(Math.max(...ms.map((m: MilestoneLite) => m.updatedAt.getTime())));
     const wk = startOfWeek(completionDate);
     const key = formatISODateOnly(wk);
     const idx = indexByWeekStart[key];

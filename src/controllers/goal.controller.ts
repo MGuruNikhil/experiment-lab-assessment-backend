@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import type { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { generateJourneyWithLLM, LLMJourneySchema } from "../services/llmService";
@@ -163,7 +164,7 @@ export async function listGoals(req: Request, res: Response) {
       suggestions: { orderBy: { createdAt: "desc" }, take: 1, select: { createdAt: true } },
     },
   });
-  const withLatestSuggestion = goals.map((g) => {
+  const withLatestSuggestion = goals.map((g: any) => {
     const latest = g.suggestions?.[0]?.createdAt ?? null;
     return {
       id: g.id,
@@ -246,7 +247,7 @@ export async function deleteGoal(req: Request, res: Response) {
   // Delete suggestions referencing this goal outside the transaction to reduce TX duration
   await prisma.suggestion.deleteMany({ where: { goalId } });
 
-  await prisma.$transaction(async (tx) => {
+  await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     // Delete all milestone dependencies where either side belongs to this goal's journeys
     await tx.milestoneDependency.deleteMany({
       where: {
@@ -377,8 +378,8 @@ export async function updateMilestone(req: Request, res: Response) {
       },
     });
     const unmet = deps
-      .filter((d) => (d as any).dependsOn?.progress !== 100)
-      .map((d) => ({ id: (d as any).dependsOn?.id as string, title: (d as any).dependsOn?.title as string }));
+      .filter((d: any) => (d as any).dependsOn?.progress !== 100)
+      .map((d: any) => ({ id: (d as any).dependsOn?.id as string, title: (d as any).dependsOn?.title as string }));
     if (unmet.length > 0) {
       return res.status(400).json({ error: "Unmet dependencies", unmetDependencies: unmet });
     }
@@ -404,7 +405,7 @@ export async function deleteMilestone(req: Request, res: Response) {
   const milestone = await prisma.milestone.findFirst({ where: { id: milestoneId, journey: { goal: { userId: uid } } } });
   if (!milestone) return notFound(res, "Milestone not found");
 
-  await prisma.$transaction(async (tx) => {
+  await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     await tx.milestoneDependency.deleteMany({ where: { OR: [{ milestoneId }, { dependsOnId: milestoneId }] } });
     await tx.milestone.delete({ where: { id: milestoneId } });
   });
@@ -544,7 +545,7 @@ export async function suggestForGoal(req: Request, res: Response) {
     },
     sigOptions
   );
-  const firstParsed = cachedList.find((c) => {
+  const firstParsed = cachedList.find((c: any) => {
     const r: any = c.response as any;
     const sig = r && typeof r === "object" ? (r.signature as string | undefined) : undefined;
     return sig === currentSig && r && typeof r === "object" && "parsed" in r && r.parsed && typeof r.parsed === "object";
@@ -555,7 +556,7 @@ export async function suggestForGoal(req: Request, res: Response) {
     return res.json({ ...(r.parsed as any), cached: true, cachedAt: firstParsed.createdAt });
   }
   // Optionally, if there is a latest cache with matching signature but no parsed, return that metadata
-  const latestMatching = cachedList.find((c) => {
+  const latestMatching = cachedList.find((c: any) => {
     const r: any = c.response as any;
     const sig = r && typeof r === "object" ? (r.signature as string | undefined) : undefined;
     return sig === currentSig;
@@ -603,7 +604,7 @@ export async function suggestForGoal(req: Request, res: Response) {
       });
 
       // Create journey + milestones in DB within a transaction
-  const created = await prisma.$transaction(async (tx) => {
+  const created = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         const journey = await tx.journey.create({
           data: {
             goalId: goal.id,
@@ -614,7 +615,7 @@ export async function suggestForGoal(req: Request, res: Response) {
 
         // Create milestones first; store their ids to add dependencies
         const ids: string[] = [];
-        for (const [i, m] of valid.milestones.entries()) {
+  for (const [i, m] of valid.milestones.entries()) {
           const createdMs = await tx.milestone.create({
             data: {
               journeyId: journey.id,

@@ -30,6 +30,10 @@ app.use("/api", checkins_routes_1.default);
 app.get("/health", (_req, res) => {
     res.json({ ok: true });
 });
+// Also expose health under /api for serverless routing setups
+app.get("/api/health", (_req, res) => {
+    res.json({ ok: true });
+});
 exports.default = app;
 // 404 and error handlers
 app.use(error_middleware_1.notFound);
