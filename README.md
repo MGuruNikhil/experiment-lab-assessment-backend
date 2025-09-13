@@ -53,6 +53,31 @@ npx prisma generate
 npm run dev
 ```
 
+### Deploying to Vercel
+
+This backend is set up to run as Vercel Serverless Functions using Express.
+
+- Functions live under `backend/api/` and export the Express app.
+- `backend/vercel.json` pins the functions runtime to Node.js 20.
+- Prisma client is generated during install via `postinstall` and also in `vercel-build`.
+
+Required environment variables (set in Vercel → Project Settings → Environment Variables):
+
+- `DATABASE_URL` (PostgreSQL connection string)
+- `JWT_SECRET`
+- Optional LLM-related:
+   - `OPENROUTER_API_KEY`
+   - `LLM_PROVIDER` (e.g. `openrouter` or leave empty for heuristic)
+   - `MAX_LLM_PER_DAY` (number)
+- CORS:
+   - `FRONTEND_URL` (e.g. your deployed frontend URL)
+
+Notes:
+
+- Use Vercel Postgres or any externally accessible PostgreSQL.
+- Run `npx prisma migrate deploy` locally or via a CI/CD job to apply migrations to production DB before switching traffic. Vercel serverless functions shouldn't run long migrations during cold starts.
+- Health check: `GET /api/health`.
+
 ### Endpoints
 
 - POST `/api/auth/register` body: `{ name, email, password }`

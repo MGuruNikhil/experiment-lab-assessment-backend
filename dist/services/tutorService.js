@@ -8,6 +8,7 @@ exports.sendMessage = sendMessage;
 exports.closeSession = closeSession;
 const prisma_1 = require("../lib/prisma");
 const llmService_1 = require("./llmService");
+const tutorSummaryService_1 = require("./tutorSummaryService");
 class ServiceError extends Error {
     constructor(status, message, detail) {
         super(message);
@@ -145,6 +146,13 @@ async function sendMessage(input) {
 async function closeSession(userId, sessionId) {
     await ensureOwnershipSession(userId, sessionId);
     const updated = await prisma_1.prisma.tutorSession.update({ where: { id: sessionId }, data: { status: "closed" } });
+    // Best-effort summary generation; ignore errors
+    try {
+        await (0, tutorSummaryService_1.generateAndStoreSummary)(userId, sessionId, { force: false });
+    }
+    catch (_e) {
+        // swallow; session is closed regardless
+    }
     return updated;
 }
 //# sourceMappingURL=tutorService.js.map

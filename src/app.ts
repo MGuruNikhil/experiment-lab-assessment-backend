@@ -31,6 +31,10 @@ app.use("/api", checkinsRoutes);
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
+// Also expose health under /api for serverless routing setups
+app.get("/api/health", (_req, res) => {
+  res.json({ ok: true });
+});
 
 export default app;
 // 404 and error handlers

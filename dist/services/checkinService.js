@@ -94,6 +94,26 @@ async function deleteSchedule(userId, id) {
 async function createEntry(params) {
     const { userId, scheduleId, answers, notes, progress, completedAt } = params;
     const schedule = await getScheduleForUser(userId, scheduleId);
+    // Enforce at most one check-in per UTC day for daily schedules
+    if (schedule.frequency === "daily") {
+        // Determine the UTC day window for completedAt or now
+        const ts = completedAt ?? new Date();
+        const startUtc = new Date(Date.UTC(ts.getUTCFullYear(), ts.getUTCMonth(), ts.getUTCDate(), 0, 0, 0, 0));
+        const endUtc = new Date(Date.UTC(ts.getUTCFullYear(), ts.getUTCMonth(), ts.getUTCDate(), 23, 59, 59, 999));
+        const existing = await prisma_1.prisma.checkinEntry.findFirst({
+            where: {
+                scheduleId: schedule.id,
+                userId,
+                completedAt: { gte: startUtc, lte: endUtc },
+            },
+            select: { id: true },
+        });
+        if (existing) {
+            const err = new Error("You already checked in today");
+            err.status = 409; // Conflict
+            throw err;
+        }
+    }
     const entryData = {
         scheduleId: schedule.id,
         userId,

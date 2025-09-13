@@ -35,19 +35,9 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const auth_middleware_1 = require("../middleware/auth.middleware");
-const tutor = __importStar(require("../controllers/tutor.controller"));
-const summary = __importStar(require("../controllers/tutorSummary.controller"));
+const controller = __importStar(require("../controllers/analyticsController"));
 const router = (0, express_1.Router)();
-// Sessions
-router.post("/tutor/sessions", auth_middleware_1.requireAuth, tutor.createSession);
-router.get("/tutor/sessions", auth_middleware_1.requireAuth, tutor.listSessions);
-// Messages in a session
-router.get("/tutor/sessions/:sessionId/messages", auth_middleware_1.requireAuth, tutor.listMessages);
-router.post("/tutor/sessions/:sessionId/message", auth_middleware_1.requireAuth, tutor.sendMessage);
-// Close session
-router.post("/tutor/sessions/:sessionId/close", auth_middleware_1.requireAuth, tutor.closeSession);
-// Session summary
-router.post("/tutor/sessions/:sessionId/summary", auth_middleware_1.requireAuth, summary.createSummary);
-router.get("/tutor/sessions/:sessionId/summary", auth_middleware_1.requireAuth, summary.getSummary);
+router.get("/analytics/overview", auth_middleware_1.requireAuth, controller.overview);
+router.get("/analytics/goal/:goalId", auth_middleware_1.requireAuth, controller.goal);
 exports.default = router;
-//# sourceMappingURL=tutor.routes.js.map
+//# sourceMappingURL=analytics.js.map
