@@ -21,7 +21,12 @@ export async function getOverview(userId: string) {
   // Fetch goals with milestones for completion stats
   const goals = await prisma.goal.findMany({
     where: { userId },
-    select: { id: true, journeys: { select: { milestones: { select: { progress: true, updatedAt: true } } } } },
+    select: {
+      id: true,
+      createdAt: true,
+      journeys: { select: { milestones: { select: { progress: true, updatedAt: true } } } },
+    },
+    orderBy: { createdAt: "asc" },
   });
   const totalGoals = goals.length;
     const goalMilestones = goals.map((g: { journeys: { milestones: { progress: number | null; updatedAt: Date }[] }[] }) => g.journeys.flatMap((j: { milestones: { progress: number | null; updatedAt: Date }[] }) => j.milestones));
@@ -69,6 +74,43 @@ export async function getOverview(userId: string) {
     }
   }
 
+  // Build time series for last 12 weeks (inclusive of current week)
+  const weeks = 12;
+  const currentWeekStart = startOfWeekUTC(now);
+  const weekStarts: Date[] = Array.from({ length: weeks }).map((_, i) => {
+    const d = new Date(currentWeekStart);
+    d.setUTCDate(d.getUTCDate() - (weeks - 1 - i) * 7);
+    return d;
+  });
+  const keys = weekStarts.map((d) => fmtISODateOnly(d));
+  const indexByKey: Record<string, number> = Object.fromEntries(keys.map((k, i) => [k, i]));
+
+  const createdCounts = new Array(weeks).fill(0) as number[];
+  const completedCounts = new Array(weeks).fill(0) as number[];
+
+  // Created counts by goal.createdAt
+  for (const g of goals) {
+    const wkKey = fmtISODateOnly(startOfWeekUTC(g.createdAt as unknown as Date));
+    const idx = indexByKey[wkKey];
+    if (idx !== undefined) createdCounts[idx] = (createdCounts[idx] ?? 0) + 1;
+  }
+
+  // Completed counts by completion week (when all milestones reach 100%)
+  for (const g of goals) {
+    const ms = g.journeys.flatMap((j: { milestones: { progress: number | null; updatedAt: Date }[] }) => j.milestones);
+    if (ms.length === 0) continue;
+    const complete = ms.every((m: { progress: number | null }) => (m.progress ?? 0) === 100);
+    if (!complete) continue;
+    const completionDate = new Date(
+      Math.max(...ms.map((m: { updatedAt: Date }) => (m.updatedAt as unknown as Date).getTime()))
+    );
+    const wkKey = fmtISODateOnly(startOfWeekUTC(completionDate));
+    const idx = indexByKey[wkKey];
+    if (idx !== undefined) completedCounts[idx] = (completedCounts[idx] ?? 0) + 1;
+  }
+
+  const goalsTimeseries = keys.map((k, i) => ({ weekStart: k, createdCount: createdCounts[i], completedCount: completedCounts[i] }));
+
   // Round some metrics sensibly
   const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -80,6 +122,7 @@ export async function getOverview(userId: string) {
     learningVelocityPerWeek: round2(learningVelocityPerWeek),
     totalTutorSessions,
     avgSessionLengthMinutes: round2(avgSessionLengthMinutes),
+    goalsTimeseries,
   };
 }
 
@@ -90,14 +133,17 @@ export async function getGoalDetails(userId: string, goalId: string) {
 
   const milestones = await prisma.milestone.findMany({
     where: { journey: { goalId: goal.id, goal: { userId } } },
-    select: { id: true, title: true, progress: true, updatedAt: true },
-    orderBy: { updatedAt: "asc" },
+    select: { id: true, title: true, progress: true, updatedAt: true, orderIndex: true, journey: { select: { createdAt: true, id: true } } },
+    orderBy: [
+      { journey: { createdAt: "asc" } },
+      { orderIndex: "asc" },
+    ],
   });
 
   const totalMilestones = milestones.length;
-    const completedMilestones = milestones.filter((m: { progress: number | null }) => (m.progress ?? 0) === 100).length;
-    const completionRatePercent = totalMilestones > 0 ? (completedMilestones / totalMilestones) * 100 : 0;
-    const completionPerMilestone = milestones.map((m: { id: string; title: string; progress: number | null }) => ({ milestoneId: m.id, title: m.title, percentComplete: m.progress ?? 0 }));
+  const completedMilestones = milestones.filter((m: { progress: number | null }) => (m.progress ?? 0) === 100).length;
+  const completionRatePercent = totalMilestones > 0 ? (completedMilestones / totalMilestones) * 100 : 0;
+  const completionPerMilestone = milestones.map((m: { id: string; title: string; progress: number | null }) => ({ milestoneId: m.id, title: m.title, percentComplete: m.progress ?? 0 }));
 
   // Completed timeline by week
   const countsByWeek: Record<string, number> = {};

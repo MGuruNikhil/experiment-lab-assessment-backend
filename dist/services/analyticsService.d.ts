@@ -6,6 +6,11 @@ export declare function getOverview(userId: string): Promise<{
     learningVelocityPerWeek: number;
     totalTutorSessions: any;
     avgSessionLengthMinutes: number;
+    goalsTimeseries: {
+        weekStart: string;
+        createdCount: number | undefined;
+        completedCount: number | undefined;
+    }[];
 }>;
 export declare function getGoalDetails(userId: string, goalId: string): Promise<{
     goalId: any;

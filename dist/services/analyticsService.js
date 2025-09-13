@@ -21,7 +21,12 @@ async function getOverview(userId) {
     // Fetch goals with milestones for completion stats
     const goals = await prisma_1.prisma.goal.findMany({
         where: { userId },
-        select: { id: true, journeys: { select: { milestones: { select: { progress: true, updatedAt: true } } } } },
+        select: {
+            id: true,
+            createdAt: true,
+            journeys: { select: { milestones: { select: { progress: true, updatedAt: true } } } },
+        },
+        orderBy: { createdAt: "asc" },
     });
     const totalGoals = goals.length;
     const goalMilestones = goals.map((g) => g.journeys.flatMap((j) => j.milestones));
@@ -71,6 +76,40 @@ async function getOverview(userId) {
                 avgSessionLengthMinutes = durations.reduce((a, b) => a + b, 0) / durations.length;
         }
     }
+    // Build time series for last 12 weeks (inclusive of current week)
+    const weeks = 12;
+    const currentWeekStart = startOfWeekUTC(now);
+    const weekStarts = Array.from({ length: weeks }).map((_, i) => {
+        const d = new Date(currentWeekStart);
+        d.setUTCDate(d.getUTCDate() - (weeks - 1 - i) * 7);
+        return d;
+    });
+    const keys = weekStarts.map((d) => fmtISODateOnly(d));
+    const indexByKey = Object.fromEntries(keys.map((k, i) => [k, i]));
+    const createdCounts = new Array(weeks).fill(0);
+    const completedCounts = new Array(weeks).fill(0);
+    // Created counts by goal.createdAt
+    for (const g of goals) {
+        const wkKey = fmtISODateOnly(startOfWeekUTC(g.createdAt));
+        const idx = indexByKey[wkKey];
+        if (idx !== undefined)
+            createdCounts[idx] = (createdCounts[idx] ?? 0) + 1;
+    }
+    // Completed counts by completion week (when all milestones reach 100%)
+    for (const g of goals) {
+        const ms = g.journeys.flatMap((j) => j.milestones);
+        if (ms.length === 0)
+            continue;
+        const complete = ms.every((m) => (m.progress ?? 0) === 100);
+        if (!complete)
+            continue;
+        const completionDate = new Date(Math.max(...ms.map((m) => m.updatedAt.getTime())));
+        const wkKey = fmtISODateOnly(startOfWeekUTC(completionDate));
+        const idx = indexByKey[wkKey];
+        if (idx !== undefined)
+            completedCounts[idx] = (completedCounts[idx] ?? 0) + 1;
+    }
+    const goalsTimeseries = keys.map((k, i) => ({ weekStart: k, createdCount: createdCounts[i], completedCount: completedCounts[i] }));
     // Round some metrics sensibly
     const round2 = (n) => Math.round(n * 100) / 100;
     return {
@@ -81,6 +120,7 @@ async function getOverview(userId) {
         learningVelocityPerWeek: round2(learningVelocityPerWeek),
         totalTutorSessions,
         avgSessionLengthMinutes: round2(avgSessionLengthMinutes),
+        goalsTimeseries,
     };
 }
 async function getGoalDetails(userId, goalId) {
@@ -90,8 +130,11 @@ async function getGoalDetails(userId, goalId) {
         return null;
     const milestones = await prisma_1.prisma.milestone.findMany({
         where: { journey: { goalId: goal.id, goal: { userId } } },
-        select: { id: true, title: true, progress: true, updatedAt: true },
-        orderBy: { updatedAt: "asc" },
+        select: { id: true, title: true, progress: true, updatedAt: true, orderIndex: true, journey: { select: { createdAt: true, id: true } } },
+        orderBy: [
+            { journey: { createdAt: "asc" } },
+            { orderIndex: "asc" },
+        ],
     });
     const totalMilestones = milestones.length;
     const completedMilestones = milestones.filter((m) => (m.progress ?? 0) === 100).length;
