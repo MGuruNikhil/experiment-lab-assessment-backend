@@ -58,7 +58,7 @@ npm run dev
 This backend is set up to run as Vercel Serverless Functions using Express.
 
 - Functions live under `backend/api/` and export the Express app.
-- `backend/vercel.json` pins the functions runtime to Node.js 20.
+- Node version is specified via `package.json#engines` (>=20). Vercel will use the official Node runtime by default; no custom runtime is configured in `vercel.json`.
 - Prisma client is generated during install via `postinstall` and also in `vercel-build`.
 
 Required environment variables (set in Vercel → Project Settings → Environment Variables):
