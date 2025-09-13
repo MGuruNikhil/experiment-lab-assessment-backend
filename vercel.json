@@ -1,6 +1,4 @@
 {
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "functions": {
-    "api/**/*.ts": { }
-  }
+  "$schema": "https://openapi.vercel.sh/vercel.json"
+  
 }
