@@ -26,9 +26,9 @@ export declare const LLMJourneySchema: z.ZodObject<{
         dependencies?: number[] | undefined;
     }>, "many">;
 }, "strip", z.ZodTypeAny, {
-    chunking: "weekly" | "biweekly";
     journeyTitle: string;
     durationWeeks: number;
+    chunking: "weekly" | "biweekly";
     milestones: {
         title: string;
         description: string;
@@ -38,9 +38,9 @@ export declare const LLMJourneySchema: z.ZodObject<{
         dependencies: number[];
     }[];
 }, {
-    chunking: "weekly" | "biweekly";
     journeyTitle: string;
     durationWeeks: number;
+    chunking: "weekly" | "biweekly";
     milestones: {
         title: string;
         startWeek: number;

@@ -29,6 +29,15 @@ npm run prisma:generate
 npm run prisma:migrate --name add_tutor_models
 ```
 
+To add check-in scheduling and entries, after editing `prisma/schema.prisma`:
+
+```bash
+# create and apply migration
+npx prisma migrate dev --name add_checkins
+# re-generate the client
+npx prisma generate
+```
+
 4. Run dev server:
 
 ```bash

@@ -10,6 +10,7 @@ const auth_routes_1 = __importDefault(require("./routes/auth.routes"));
 const goal_routes_1 = __importDefault(require("./routes/goal.routes"));
 const analytics_routes_1 = __importDefault(require("./routes/analytics.routes"));
 const tutor_routes_1 = __importDefault(require("./routes/tutor.routes"));
+const checkins_routes_1 = __importDefault(require("./routes/checkins.routes"));
 const error_middleware_1 = require("./middleware/error.middleware");
 dotenv_1.default.config();
 const app = (0, express_1.default)();
@@ -25,6 +26,7 @@ app.use("/api/auth", auth_routes_1.default);
 app.use("/api", goal_routes_1.default);
 app.use("/api", analytics_routes_1.default);
 app.use("/api", tutor_routes_1.default);
+app.use("/api", checkins_routes_1.default);
 app.get("/health", (_req, res) => {
     res.json({ ok: true });
 });

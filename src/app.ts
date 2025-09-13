@@ -5,6 +5,7 @@ import authRoutes from "./routes/auth.routes";
 import goalRoutes from "./routes/goal.routes";
 import analyticsRoutes from "./routes/analytics.routes";
 import tutorRoutes from "./routes/tutor.routes";
+import checkinsRoutes from "./routes/checkins.routes";
 import { errorHandler, notFound } from "./middleware/error.middleware";
 
 dotenv.config();
@@ -25,6 +26,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api", goalRoutes);
 app.use("/api", analyticsRoutes);
 app.use("/api", tutorRoutes);
+app.use("/api", checkinsRoutes);
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
