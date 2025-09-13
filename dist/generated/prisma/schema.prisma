@@ -1,0 +1,207 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider      = "prisma-client-js"
+  output        = "../src/generated/prisma"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  email     String   @unique
+  password  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  goals            Goal[]
+  suggestions      Suggestion[]
+  tutorSessions    TutorSession[]
+  sessionSummaries SessionSummary[]
+  CheckinSchedule  CheckinSchedule[]
+  CheckinEntry     CheckinEntry[]
+}
+
+model Goal {
+  id              String            @id @default(uuid()) @db.Uuid
+  userId          String            @db.Uuid
+  user            User              @relation(fields: [userId], references: [id])
+  title           String
+  description     String?
+  complexity      Int? // 1..10
+  suggestedWeeks  Int?
+  chunking        String? // "weekly"|"biweekly"
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  journeys        Journey[]
+  suggestions     Suggestion[]
+  tutorSessions   TutorSession[]
+  CheckinSchedule CheckinSchedule[]
+  CheckinEntry    CheckinEntry[]
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model Journey {
+  id         String      @id @default(uuid()) @db.Uuid
+  goalId     String      @db.Uuid
+  goal       Goal        @relation(fields: [goalId], references: [id])
+  title      String?
+  startDate  DateTime?
+  endDate    DateTime?
+  meta       Json?
+  createdAt  DateTime    @default(now())
+  milestones Milestone[]
+
+  @@index([goalId])
+  @@index([createdAt])
+}
+
+model Milestone {
+  id              String                @id @default(uuid()) @db.Uuid
+  journeyId       String                @db.Uuid
+  journey         Journey               @relation(fields: [journeyId], references: [id])
+  title           String
+  description     String?
+  orderIndex      Int
+  startWeek       Int?
+  endWeek         Int?
+  estimatedHours  Int?
+  progress        Int                   @default(0) // 0-100
+  metadata        Json?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  dependencies    MilestoneDependency[] @relation("deps_from")
+  requiredBy      MilestoneDependency[] @relation("deps_to")
+  tutorSessions   TutorSession[]
+  CheckinSchedule CheckinSchedule[]
+  CheckinEntry    CheckinEntry[]
+
+  @@index([journeyId])
+  @@index([createdAt])
+}
+
+model MilestoneDependency {
+  id          String    @id @default(uuid()) @db.Uuid
+  milestoneId String    @db.Uuid
+  dependsOnId String    @db.Uuid
+  milestone   Milestone @relation("deps_from", fields: [milestoneId], references: [id])
+  dependsOn   Milestone @relation("deps_to", fields: [dependsOnId], references: [id])
+  createdAt   DateTime  @default(now())
+
+  @@index([milestoneId])
+  @@index([dependsOnId])
+}
+
+model Suggestion {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  goalId    String    @db.Uuid
+  user      User      @relation(fields: [userId], references: [id])
+  goal      Goal      @relation(fields: [goalId], references: [id])
+  provider  String // "heuristic"|"openrouter"|"other"
+  response  Json
+  createdAt DateTime  @default(now())
+  expiresAt DateTime?
+
+  @@index([userId])
+  @@index([goalId])
+  @@index([createdAt])
+}
+
+// Tutor session and message models for AI-assisted tutoring and chat history
+model TutorSession {
+  id          String          @id @default(uuid()) @db.Uuid
+  userId      String          @db.Uuid
+  user        User            @relation(fields: [userId], references: [id])
+  goalId      String?         @db.Uuid // optional: session tied to a goal
+  goal        Goal?           @relation(fields: [goalId], references: [id])
+  milestoneId String?         @db.Uuid // optional: tied to a milestone
+  milestone   Milestone?      @relation(fields: [milestoneId], references: [id])
+  title       String?
+  status      String          @default("open") // open|closed
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  messages    TutorMessage[]
+  summary     SessionSummary?
+
+  @@index([userId])
+}
+
+model TutorMessage {
+  id        String       @id @default(uuid()) @db.Uuid
+  sessionId String       @db.Uuid
+  session   TutorSession @relation(fields: [sessionId], references: [id])
+  sender    String // "user" | "assistant" | "system"
+  content   String
+  metadata  Json? // e.g., { model: 'gpt-x', tokens: 123 }
+  createdAt DateTime     @default(now())
+
+  @@index([sessionId, createdAt])
+}
+
+// Summaries generated for a tutor session (LLM-produced or heuristic)
+model SessionSummary {
+  id          String       @id @default(uuid()) @db.Uuid
+  sessionId   String       @unique @db.Uuid
+  session     TutorSession @relation(fields: [sessionId], references: [id])
+  userId      String       @db.Uuid
+  user        User         @relation(fields: [userId], references: [id])
+  summaryText String
+  keyPoints   Json? // array of short bullet points
+  actionItems Json? // array of action items { text, due?: Date }
+  provider    String // 'openrouter'|'heuristic' etc.
+  rawResponse Json? // optional raw LLM response for auditing
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([userId, createdAt])
+}
+
+// Check-in scheduling and entries
+model CheckinSchedule {
+  id          String         @id @default(uuid()) @db.Uuid
+  userId      String         @db.Uuid
+  user        User           @relation(fields: [userId], references: [id])
+  goalId      String?        @db.Uuid // optional: schedule per-goal
+  goal        Goal?          @relation(fields: [goalId], references: [id])
+  milestoneId String?        @db.Uuid // optional: tie schedule to a milestone
+  milestone   Milestone?     @relation(fields: [milestoneId], references: [id])
+  frequency   String // 'daily'|'weekly'|'biweekly'
+  nextDueAt   DateTime?
+  enabled     Boolean        @default(true)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  entries     CheckinEntry[]
+
+  @@index([userId])
+}
+
+model CheckinEntry {
+  id          String          @id @default(uuid()) @db.Uuid
+  scheduleId  String          @db.Uuid
+  schedule    CheckinSchedule @relation(fields: [scheduleId], references: [id])
+  userId      String          @db.Uuid
+  user        User            @relation(fields: [userId], references: [id])
+  goalId      String?         @db.Uuid // snapshot of which goal it was for
+  goal        Goal?           @relation(fields: [goalId], references: [id])
+  milestoneId String?         @db.Uuid // snapshot if tied to a milestone
+  milestone   Milestone?      @relation(fields: [milestoneId], references: [id])
+  completedAt DateTime        @default(now())
+  answers     Json?
+  notes       String?
+  progress    Int?
+  createdAt   DateTime        @default(now())
+
+  @@index([scheduleId, createdAt])
+}
