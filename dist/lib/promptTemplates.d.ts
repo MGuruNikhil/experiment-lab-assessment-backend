@@ -5,6 +5,7 @@ export declare function buildTutorPrompt(args: {
     recentMessages: TutorMessage[];
     userProfile?: Record<string, any>;
     mode?: TutorMode;
+    maxMessages?: number;
 }): {
     systemPrompt: string;
     userPrompt: string;

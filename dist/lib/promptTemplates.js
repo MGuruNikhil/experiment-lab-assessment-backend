@@ -1,32 +1,51 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.buildTutorPrompt = buildTutorPrompt;
+/*
+ System: You are an expert tutor. Use provided goal and milestone. Keep replies short and actionable. Provide an explanation in simple terms, 2-3 example applications, and 2 next steps the learner can take. If user's question is ambiguous, ask one clarifying question. Output must be plain text for the chat UI. Optional: append JSON block for practice problems if asked.
+*/
 function buildTutorPrompt(args) {
     const { goal, milestone, recentMessages, userProfile, mode } = args;
-    const systemPrompt = [
-        "You are an expert tutor. Keep replies concise.",
-        "Use the provided goal and current milestone as context.",
-        "If user question is ambiguous, ask one clarifying question.",
-        "Provide a short explanation and 2 actionable next steps.",
-        "If asked to apply theory to a use-case, mention the user's goal and include an example.",
-        mode ? `Mode: ${mode}` : undefined,
-    ].filter(Boolean).join("\n");
-    const recentUser = recentMessages?.filter(m => m.role === "user").slice(-1)[0]?.content ?? "";
-    const g = goal ? `Goal: ${goal.title}` : "";
-    const m = milestone ? `Milestone: ${milestone.title}` : "";
-    const profile = userProfile ? `User profile hints: ${JSON.stringify(userProfile).slice(0, 400)}` : "";
-    const userPrompt = [
-        g,
-        m,
-        profile,
-        "Recent question:",
-        recentUser,
-    ].filter(Boolean).join("\n");
-    // Example (for providers)
-    // Example:
-    // System: You are an expert tutor ... Provide short explanation and 2 steps.
-    // User: Goal: Learn React\nMilestone: Hooks Basics\nRecent question: "Explain useState vs useRef"
-    // Assistant: "useState triggers re-render when updated; useRef does not. Next steps: 1) Refactor a component using useState to useRef where re-render isn't needed. 2) Build a small counter with both and compare."
+    const maxMessages = typeof args.maxMessages === "number" && args.maxMessages > 0 ? args.maxMessages : 8;
+    // --- System prompt: tutor behavior contract ---
+    const lines = [];
+    lines.push("You are an expert tutor. Use the provided goal and current milestone as hard context.", "Keep replies short and actionable (aim for ~6-10 sentences).", "Explain theory concisely as 2-4 bullet points.", "Provide exactly 2 actionable next steps the learner can take.", "Ask one clarifying question only if necessary.", "If the user asks to apply to a use-case, include a short example tailored to the user's goal.", "Respect the current milestone and avoid deviating beyond that scope unless you explicitly say you're going beyond it.", "Output must be plain text for the chat UI.");
+    if (mode)
+        lines.push(`Mode: ${mode}`);
+    const systemPrompt = lines.join("\n");
+    // --- User prompt: contextual block ---
+    const gTitle = goal?.title?.trim();
+    const mTitle = milestone?.title?.trim();
+    const mDesc = milestone?.description?.trim();
+    // Truncate history to last N; if truncated, note it
+    const hasOverflow = (recentMessages?.length || 0) > maxMessages;
+    const trimmed = (recentMessages || []).slice(-maxMessages);
+    // Format recent messages in alternating speaker format (skip system messages for brevity)
+    const transcript = trimmed
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .map((m) => `${m.role === "user" ? "User" : "Assistant"}: "${String(m.content || "").trim()}"`)
+        .join("\n");
+    let profileLine = "";
+    if (userProfile && Object.keys(userProfile).length > 0) {
+        // keep it short if very large
+        const json = JSON.stringify(userProfile);
+        profileLine = `Learner Profile: ${json.length > 600 ? json.slice(0, 600) + "…" : json}`;
+    }
+    const userPromptParts = [];
+    if (gTitle)
+        userPromptParts.push(`Goal: ${gTitle}`);
+    if (mTitle)
+        userPromptParts.push(`Milestone: ${mTitle}`);
+    if (mDesc)
+        userPromptParts.push(`Milestone Description: ${mDesc}`);
+    if (profileLine)
+        userPromptParts.push(profileLine);
+    userPromptParts.push(hasOverflow
+        ? "Conversation (older history omitted for brevity):"
+        : "Conversation:");
+    if (transcript)
+        userPromptParts.push(transcript);
+    const userPrompt = userPromptParts.join("\n");
     return { systemPrompt, userPrompt };
 }
 //# sourceMappingURL=promptTemplates.js.map
